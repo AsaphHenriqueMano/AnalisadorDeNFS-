@@ -1,0 +1,132 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Analisador de NF-e (MVP)</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; background: #f4f4f4; }
+    h1 { color: #333; }
+    input[type="file"] { margin-bottom: 1em; }
+    .card { background: white; padding: 1.5em; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin-bottom: 1em; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+    th, td { padding: 8px; border: 1px solid #ccc; text-align: center; }
+  </style>
+</head>
+<body>
+
+  <h1>📄 Analisador de Notas Fiscais (MVP Frontend)</h1>
+  <input type="file" id="fileInput" accept=".xml" multiple />
+  <button id="analisarBtn">Analisar</button>
+
+  <div id="resultado" class="card" style="display:none;">
+    <h2>📊 Resultado</h2>
+    <div id="tabelaNotas"></div>
+    <div id="analiseFinal"></div>
+  </div>
+
+  <script>
+    function parseXML(xmlStr) {
+      const parser = new DOMParser();
+      return parser.parseFromString(xmlStr, "application/xml");
+    }
+
+    function extrairDados(xml) {
+      const numero = xml.querySelector("nNF")?.textContent || "0";
+      const valor = parseFloat(xml.querySelector("vNF")?.textContent || "0");
+      const cnpj = xml.querySelector("emit > CNPJ")?.textContent || "00000000000000";
+      const data = xml.querySelector("dhEmi")?.textContent?.slice(0, 10) || "2023-01-01";
+      return { numero: parseInt(numero), valor, cnpj, data };
+    }
+
+    async function consultarCNPJ(cnpj) {
+      try {
+        const resposta = await fetch(`https://cors-anywhere.herokuapp.com/https://www.receitaws.com.br/v1/cnpj/${cnpj}`, {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        const dados = await resposta.json();
+        return dados;
+      } catch (e) {
+        console.error("Erro ao consultar ReceitaWS:", e);
+        return null;
+      }
+    }
+
+    async function processarArquivos() {
+      const input = document.getElementById("fileInput");
+      const files = Array.from(input.files).slice(0, 6);
+      if (files.length < 2) {
+        alert("Envie pelo menos 2 arquivos XML de NF-e.");
+        return;
+      }
+
+      const resultados = [];
+      for (const file of files) {
+        const text = await file.text();
+        const xml = parseXML(text);
+        const dados = extrairDados(xml);
+        resultados.push(dados);
+      }
+
+      resultados.sort((a, b) => a.numero - b.numero);
+
+      await mostrarResultados(resultados);
+    }
+
+    async function mostrarResultados(notas) {
+      const tabela = \`
+        <table>
+          <tr><th>Número</th><th>Valor</th><th>CNPJ</th><th>Data</th></tr>
+          \${notas.map(n => \`<tr><td>\${n.numero}</td><td>R$ \${n.valor.toFixed(2)}</td><td>\${n.cnpj}</td><td>\${n.data}</td></tr>\`).join('')}
+        </table>
+      \`;
+
+      const agrupamentoMensal = {};
+      notas.forEach(nota => {
+        const mesAno = nota.data.slice(0, 7);
+        agrupamentoMensal[mesAno] = (agrupamentoMensal[mesAno] || 0) + 1;
+      });
+
+      const totalMeses = Object.keys(agrupamentoMensal).length;
+      const totalNotas = notas.length;
+      const mediaQuantidade = Math.round(totalNotas / totalMeses);
+
+      const mediaValor = notas.reduce((s, n) => s + n.valor, 0) / totalNotas;
+      const estimativaMensal = mediaQuantidade * mediaValor;
+
+      const cnpj = notas[0].cnpj;
+      const dadosCNPJ = await consultarCNPJ(cnpj);
+
+      let infoCNPJ = \`<h3>🏢 CNPJ</h3><p>CNPJ analisado: <b>\${cnpj}</b></p>\`;
+
+      if (dadosCNPJ && dadosCNPJ.status === "OK") {
+        infoCNPJ += \`
+          <p>Razão Social: <b>\${dadosCNPJ.nome}</b></p>
+          <p>Data de abertura: <b>\${dadosCNPJ.abertura}</b></p>
+          <p>Situação: <b>\${dadosCNPJ.situacao}</b></p>
+          <p>Tipo: <b>\${dadosCNPJ.tipo}</b></p>
+          <p>UF: <b>\${dadosCNPJ.uf}</b></p>
+          <p>Atividade Principal: <b>\${dadosCNPJ.atividade_principal?.[0]?.text || 'N/A'}</b></p>
+        \`;
+      } else {
+        infoCNPJ += \`<p>❌ Não foi possível obter dados reais do CNPJ.</p>\`;
+      }
+
+      const analise = \`
+        <h3>📈 Análise</h3>
+        <p>🔢 Média de NFs por mês: <b>\${mediaQuantidade}</b></p>
+        <p>💵 Valor médio por nota: <b>R$ \${mediaValor.toFixed(2)}</b></p>
+        <p>📊 Faturamento mensal estimado: <b>R$ \${estimativaMensal.toFixed(2)}</b></p>
+        \${infoCNPJ}
+      \`;
+
+      document.getElementById("tabelaNotas").innerHTML = tabela;
+      document.getElementById("analiseFinal").innerHTML = analise;
+      document.getElementById("resultado").style.display = "block";
+    }
+
+    document.getElementById("analisarBtn").addEventListener("click", processarArquivos);
+  </script>
+</body>
+</html>
